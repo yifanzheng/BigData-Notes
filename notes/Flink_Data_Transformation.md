@@ -77,7 +77,7 @@ env.fromElements(1, 2, 3, 4, 5).filter(x -> x > 3).print();
 
 ### 2.4 KeyBy 和 Reduce
 
-- **KeyBy [DataStream → KeyedStream]** ：用于将相同 Key 值的数据分到相同的分区中；
+- **KeyBy [DataStream → KeyedStream]** ：用于将相同 Key 值的数据分到相同的分区中，是在水平分向对流进行切分；
 - **Reduce [KeyedStream → DataStream]** ：用于对数据执行归约计算。
 
 如下例子将数据按照 key 值分区后，滚动进行求和计算：
@@ -97,6 +97,10 @@ keyedStream.reduce((ReduceFunction<Tuple2<String, Integer>>) (value1, value2) ->
 (b,3)
 (b,8)
 ```
+
+使用 KeyBy 进行数据切分之后，后续算子的每一个实例可以只处理特定 Key 集合对应的数据。除了处理本身外，Flink 中允许算子维护一部分状态（State），在KeyedStream 算子的状态也是可以分布式存储的。由于 KeyBy 是一种确定的数据分配方式（下文将介绍其它分配方式），因此即使发生 Failover 作业重启，甚至发生了并发度的改变，Flink 都可以重新分配 Key 分组并保证处理某个 Key 的分组一定包含该 Key 的状态，从而保证一致性。
+
+最后需要强调的是，**KeyBy 操作只有当 Key 的数量超过算子的并发实例数才可以较好的工作。由于同一个 Key 对应的所有数据都会发送到同一个实例上，因此如果 Key 的数量比实例数量少时，就会导致部分实例收不到数据，从而导致计算能力不能充分发挥。**
 
 KeyBy 操作存在以下两个限制：
 
@@ -204,48 +208,63 @@ streamSource.project(0,2).print();
 (ming,2020-09-23)
 ```
 
-## 三、物理分区
+## 三、物理分组
 
-物理分区 (Physical partitioning) 是 Flink 提供的底层的 API，允许用户采用内置的分区规则或者自定义的分区规则来对数据进行分区，从而避免数据在某些分区上过于倾斜，常用的分区规则如下：
+物理分组 (Physical partitioning) 是 Flink 提供的底层的 API，允许用户采用内置的分区规则或者自定义的分区规则来对数据进行分区，从而避免数据在某些分区上过于倾斜，常用的分区规则如下：
 
-### 3.1 Random partitioning [DataStream → DataStream]
+### 3.1 Global
 
-随机分区 (Random partitioning) 用于随机的将数据分布到所有下游分区中，通过 shuffle 方法来进行实现：
+上游算子将所有记录发送给下游算子的第一个实例。
 
+```java
+dataStream.global();
+```
+
+### 3.2 Shuffle
+
+Shuffle 用于随机均匀地将数据分布到所有下游分区中。
 ```java
 dataStream.shuffle();
 ```
 
-### 3.2 Rebalancing [DataStream → DataStream]
+### 3.3 Rebalance
 
-Rebalancing 采用轮询的方式将数据进行分区，其适合于存在数据倾斜的场景下，通过 rebalance 方法进行实现：  
+Rebalance 采用轮询的方式将数据进行分区，其适合于存在数据倾斜的场景下，通过 rebalance 方法进行实现。 
 
 ```java
 dataStream.rebalance();
 ```
 
-### 3.3 Rescaling [DataStream → DataStream]
+### 3.4 Rescale
 
-当采用 Rebalancing 进行分区平衡时，其实现的是全局性的负载均衡，数据会通过网络传输到其他节点上并完成分区数据的均衡。 而 Rescaling 则是低配版本的 rebalance，它不需要额外的网络开销，它只会对上下游的算子之间进行重新均衡，通过 rescale 方法进行实现：
+当采用 Rebalance 进行分区平衡时，其实现的是全局性的负载均衡，数据会通过网络传输到其他节点上并完成分区数据的均衡。 而 Rescale 则是本地的轮询分配，只在本机进行，它不需要额外的网络开销，它只会对上下游的算子之间进行重新均衡。
 
 ```java
 dataStream.rescale();
 ```
 
-ReScale 这个单词具有重新缩放的意义，其对应的操作也是如此，具体如下：如果上游 operation 并行度为 2，而下游的 operation 并行度为 6，则其中 1 个上游的 operation 会将元素分发到 3 个下游 operation，另 1 个上游 operation 则会将元素分发到另外 3 个下游 operation。反之亦然，如果上游的 operation 并行度为 6，而下游 operation 并行度为 2，则其中 3 个上游 operation 会将元素分发到 1 个下游 operation，另 3 个上游 operation 会将元素分发到另外 1 个下游operation：
+ReScale 这个单词具有重新缩放的意义，其对应的操作也是如此，具体如下：如果上游 operation 并行度为 2，而下游的 operation 并行度为 6，则其中 1 个上游的 operation 会将元素分发到 3 个下游 operation，另 1 个上游 operation 则会将元素分发到另外 3 个下游 operation。反之亦然，如果上游的 operation 并行度为 6，而下游 operation 并行度为 2，则其中 3 个上游 operation 会将元素分发到 1 个下游 operation，另 3 个上游 operation 会将元素分发到另外 1 个下游 operation：
 
 <div align="center"> <img src="https://gitee.com/heibaiying/BigData-Notes/raw/master/pictures/flink-Rescaling.png"/> </div>
 
 
-### 3.4 Broadcasting [DataStream → DataStream]
+### 3.5 Broadcast
 
-将数据分发到所有分区上。通常用于小数据集与大数据集进行关联的情况下，此时可以将小数据集广播到所有分区上，避免频繁的跨分区关联，通过 broadcast 方法进行实现：
+将数据广播到所有分区上。通常用于小数据集与大数据集进行关联的情况下，此时可以将小数据集广播到所有分区上，避免频繁的跨分区关联。
 
 ```java
 dataStream.broadcast();
 ```
 
-### 3.5 Custom partitioning [DataStream → DataStream]
+### 3.6 Forward
+
+上下游并发度一样时进行一对一发送。
+
+```java
+dataStream.forward();
+```
+
+### 3.7 Custom partitioning 
 
 Flink 运行用户采用自定义的分区规则来实现分区，此时需要通过实现 Partitioner 接口来自定义分区规则，并指定对应的分区键，示例如下：
 

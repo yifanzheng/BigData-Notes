@@ -21,6 +21,8 @@
 
 Flink 支持使用多种部署模式来满足不同规模应用的需求，常见的有单机模式，Standalone Cluster 模式，同时 Flink 也支持部署在其他第三方平台上，如 YARN，Mesos，Docker，Kubernetes 等。以下主要介绍其单机模式和 Standalone Cluster 模式的部署。
 
+详细部署：[Flink 开发环境搭建和应用的配置、部署及运行](notes/installation/Flink环境部署、应用配置及运行应用程序.pdf)
+
 ## 二、单机模式
 
 单机模式是一种开箱即用的模式，可以在单台服务器上运行，适用于日常的开发和调试。具体操作步骤如下：
